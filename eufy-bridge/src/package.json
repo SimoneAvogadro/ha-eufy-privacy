@@ -1,0 +1,14 @@
+{
+  "name": "eufy-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "eufy-security-client": "^3.2.0",
+    "express": "^4.19.2",
+    "ws": "^8.16.0"
+  }
+}

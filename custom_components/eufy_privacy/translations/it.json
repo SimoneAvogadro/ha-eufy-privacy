@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Privacy",
+        "description": "Inserisci le credenziali Eufy. Il bridge Add-on deve essere già in esecuzione.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "country": "Paese (ISO-2)",
+          "language": "Lingua",
+          "bridge_url": "URL del bridge",
+          "bridge_token": "Token del bridge (opzionale)"
+        }
+      }
+    },
+    "error": {
+      "bridge_unreachable": "Impossibile raggiungere il bridge add-on. Verifica che sia installato e in esecuzione.",
+      "bridge_token_invalid": "Il bridge ha rifiutato il token. Recupera /data/bridge_token dall'add-on.",
+      "captcha_required": "Eufy richiede CAPTCHA: apri l'app Eufy Security sul telefono e rifai login per sbloccare.",
+      "two_factor_required": "Eufy richiede 2FA: completa il login dall'app mobile e riprova.",
+      "invalid_auth": "Credenziali Eufy non valide.",
+      "unknown": "Errore imprevisto. Controlla i log."
+    },
+    "abort": {
+      "already_configured": "Questo account è già configurato."
+    }
+  },
+  "services": {
+    "set_privacy_mode": {
+      "name": "Imposta modalità privacy",
+      "description": "Attiva o disattiva la modalità privacy su una telecamera.",
+      "fields": {
+        "serial": {
+          "name": "Serial",
+          "description": "Numero di serie della camera."
+        },
+        "enabled": {
+          "name": "Attivo",
+          "description": "true = privacy attiva, false = privacy disattiva."
+        }
+      }
+    }
+  }
+}

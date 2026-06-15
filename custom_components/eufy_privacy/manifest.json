@@ -1,0 +1,12 @@
+{
+  "domain": "eufy_privacy",
+  "name": "Eufy Privacy",
+  "version": "0.1.0",
+  "documentation": "https://github.com/SimoneAvogadro/ha-eufy-privacy",
+  "issue_tracker": "https://github.com/SimoneAvogadro/ha-eufy-privacy/issues",
+  "codeowners": ["@SimoneAvogadro"],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "requirements": [],
+  "dependencies": []
+}
