@@ -7,7 +7,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "eufy-security-client": "^3.2.0",
+    "eufy-security-client": "~3.2.0",
     "express": "^4.19.2",
     "ws": "^8.16.0"
   }
