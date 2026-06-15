@@ -1,174 +1,152 @@
-# STATUS — Eufy Privacy per Home Assistant
+# STATUS — Eufy Privacy for Home Assistant
 
-> Snapshot dello stato al **2026-06-15**, scritto prima di promuovere il lavoro
-> a progetto dedicato. Serve da punto di ripartenza una volta spostato tutto in
-> un repo/folder separato.
+> Snapshot as of **2026-06-15**, after promoting the work to a dedicated repo.
+> Restart point for future sessions.
 
-## Cos'è
+## What it is
 
-Due artefatti che insieme espongono in HA uno **switch privacy** per ogni
-telecamera Eufy + un **binary_sensor** di connettività + il servizio
-`eufy_privacy.set_privacy_mode`, con aggiornamenti **push in tempo reale**
-(1–5 s) via FCM dal cloud Eufy.
+Two artifacts that together expose, in HA, a **privacy switch** for every Eufy
+camera + a connectivity **binary_sensor** + the `eufy_privacy.set_privacy_mode`
+service, with **real-time push** updates (1–5 s) via FCM from the Eufy cloud.
 
 ```
-HA/
-├── STATUS.md                   ← questo file
-├── README.md                   ← guida installazione/verifica (completa)
-├── addon-eufy-bridge/          ← Supervisor Add-on (sidecar Node.js)
+<repo-root>/
+├── STATUS.md                   ← this file
+├── README.md                   ← install/verify guide (complete)
+├── hacs.json                   ← HACS integration manifest
+├── repository.yaml             ← add-on repository manifest
+├── .gitignore
+├── eufy-bridge/                ← Supervisor add-on (Node.js sidecar)
 │   ├── config.yaml
 │   ├── Dockerfile
 │   └── src/{server.js, package.json}
 └── custom_components/
-    └── eufy_privacy/           ← integrazione Python (config_flow, coordinator, ...)
+    └── eufy_privacy/           ← Python integration (config_flow, coordinator, ...)
         ├── __init__.py, const.py, config_flow.py, coordinator.py
         ├── bridge.py, events.py, switch.py, binary_sensor.py
         ├── manifest.json, services.yaml, strings.json
         └── translations/{en.json, it.json}
 ```
 
-### Perché due pezzi
+### Why two pieces
 
-`eufy-security-client` è una libreria **Node.js**: su HAOS non gira nel container
-core di HA. Sta quindi in un **Add-on** (sidecar) che espone REST + WebSocket;
-l'integrazione Python ci parla via rete interna del Supervisor. È lo stesso
-pattern del progetto ufficiale `eufy-security-ws`.
+`eufy-security-client` is a **Node.js** library: on HAOS it does not run inside
+HA's core container. It therefore lives in an **add-on** (sidecar) exposing REST
++ WebSocket; the Python integration talks to it over the Supervisor internal
+network. Same pattern as the official `eufy-security-ws` project.
 
-## Architettura runtime
+## Runtime architecture
 
 ```
-[App mobile Eufy / HomeBase]
+[Eufy mobile app / HomeBase]
         │  FCM push (1-5s)
         ▼
-[eufy-security-client nel bridge Node.js]   ── emette "device property changed"
+[eufy-security-client in the Node.js bridge]   ── emits "device property changed"
         │
         ▼
-[Bridge /events WebSocket]   ── broadcast JSON ai client
+[Bridge /events WebSocket]   ── broadcasts JSON to clients
         │
         ▼
-[custom_components: EufyEventStream]  ── apply_event_update(serial, …) sul coordinator
+[custom_components: EufyEventStream]  ── apply_event_update(serial, …) on the coordinator
         │
         ▼
-[switch / binary_sensor in HA]  ← stato aggiornato
+[switch / binary_sensor in HA]  ← state updated
 ```
 
-- **Push primario** via FCM → WS.
-- **Heartbeat** ogni 10 min (`UPDATE_INTERVAL` in `const.py`): GET `/cameras`
-  per ricucire eventi persi.
-- **Comandi**: switch e servizio chiamano `POST /cameras/{serial}/privacy`;
-  lo stato torna via push, niente polling forzato post-toggle.
+- **Primary push** via FCM → WS.
+- **Heartbeat** every 10 min (`UPDATE_INTERVAL` in `const.py`): GET `/cameras`
+  to recover missed events.
+- **Commands**: switch and service call `POST /cameras/{serial}/privacy`; state
+  returns via push, no forced polling after the toggle.
 
-### Mapping privacy (load-bearing)
+### Privacy mapping (load-bearing)
 
-`eufy-security-client` 3.2 **non** ha `setPrivacyMode()`/`isPrivacyModeEnabled()`.
-La privacy è il flag `enabled` del device, guidato dalla stazione:
+`eufy-security-client` 3.2 does **not** have `setPrivacyMode()` /
+`isPrivacyModeEnabled()`. Privacy is the device's `enabled` flag, driven by the
+station:
 
-| Operazione                        | API libreria                          |
+| Operation                         | Library API                           |
 |-----------------------------------|---------------------------------------|
-| Leggere stato privacy             | `!device.isEnabled()`                 |
-| Attivare privacy (camera off)     | `station.enableDevice(device, false)` |
-| Disattivare privacy (camera on)   | `station.enableDevice(device, true)`  |
+| Read privacy state                | `!device.isEnabled()`                 |
+| Enable privacy (camera off)       | `station.enableDevice(device, false)` |
+| Disable privacy (camera on)       | `station.enableDevice(device, true)`  |
 
-Il bridge nasconde l'inversione: l'API REST espone `privacyEnabled` naturale
-(`true` = camera in privacy / spenta).
+The bridge hides the inversion: the REST API exposes a natural `privacyEnabled`
+(`true` = camera in privacy / off).
 
-## API del bridge (server.js)
+## Bridge API (server.js)
 
-| Metodo | Path                      | Auth            | Note |
-|--------|---------------------------|-----------------|------|
-| GET    | `/healthz`                | nessuna         | `{connected, lastError, initialised}` |
-| POST   | `/init`                   | X-Bridge-Token  | login Eufy; 409 con `code` CAPTCHA/2FA/AUTH_FAILED |
+| Method | Path                      | Auth            | Notes |
+|--------|---------------------------|-----------------|-------|
+| GET    | `/healthz`                | none            | `{connected, lastError, initialised}` |
+| POST   | `/init`                   | X-Bridge-Token  | Eufy login; 409 with `code` CAPTCHA/2FA/AUTH_FAILED |
 | GET    | `/cameras`                | X-Bridge-Token  | snapshot array |
-| GET    | `/cameras/:serial`        | X-Bridge-Token  | singola camera |
-| POST   | `/cameras/:serial/privacy`| X-Bridge-Token  | body `{enabled: bool}`; 501 se NOT_SUPPORTED |
-| GET    | `/diagnose/:a/:b`         | X-Bridge-Token  | diff rawProperties (porta `checkStatus.js`) |
-| WS     | `/events`                 | header o `?token=` | push: privacy_changed, battery_changed, devices_changed, bridge_status |
+| GET    | `/cameras/:serial`        | X-Bridge-Token  | single camera |
+| POST   | `/cameras/:serial/privacy`| X-Bridge-Token  | body `{enabled: bool}`; 501 if NOT_SUPPORTED |
+| GET    | `/diagnose/:a/:b`         | X-Bridge-Token  | rawProperties diff (ports `checkStatus.js`) |
+| WS     | `/events`                 | header or `?token=` | push: privacy_changed, battery_changed, devices_changed, bridge_status |
 
-- Token bridge generato/persistito in `/data/bridge_token` (32 byte hex, mode 600).
-- Porta unica condivisa HTTP+WS (default 8787), solo rete interna Supervisor.
-- Persiste `persistent.json` Eufy in `/data` (riusa token cloud, ~18 mesi).
+- Bridge token generated/persisted in `/data/bridge_token` (32-byte hex, mode 600).
+- Single port shared HTTP+WS (default 8787), Supervisor internal network only.
+- Persists Eufy `persistent.json` in `/data` (reuses cloud token, ~18 months).
 
-## Stato: cosa è FATTO
+## Packaging & distribution — DONE
 
-- [x] Add-on Node.js completo: REST + WS, auth a token, shutdown pulito, backoff lato client
-- [x] Config flow con gestione errori granulare (CAPTCHA / 2FA / bridge_token / unreachable / unknown)
-- [x] Coordinator push-driven + heartbeat di reconciliation; re-init sessione su token Eufy scaduto
-- [x] WS consumer con riconnessione a backoff esponenziale + refresh post-riconnessione
-- [x] Entità: `switch.<cam>_privacy`, `binary_sensor.<cam>_online`, device registry per camera
-- [x] Servizio `eufy_privacy.set_privacy_mode(serial, enabled)`
-- [x] Traduzioni `en` + `it`, `services.yaml`, `strings.json` (chiavi errore allineate al config_flow)
-- [x] Endpoint `/diagnose` per identificare il property ID privacy su modelli nuovi
-- [x] `iot_class: local_push` corretto; `requirements: []` corretto (logica nel bridge, non in Python)
-- [x] README con installazione add-on + integrazione + 10 step di verifica end-to-end
+Published as a **mono-repo** at
+**https://github.com/SimoneAvogadro/ha-eufy-privacy**:
 
-## Stato: cosa MANCA / limiti noti
+- `custom_components/eufy_privacy/` → distributed via **HACS** (integration
+  category), driven by `hacs.json`.
+- `eufy-bridge/` → distributed via **add-on repository**
+  (Settings → Add-ons → Repositories), driven by `repository.yaml`.
 
-- [ ] **Mai verificato end-to-end su un HAOS reale** (la verifica nel README è una checklist, non un report)
-- [ ] Nessun test (Python o Node)
-- [ ] Snapshot / `camera` entity: predisposto nel README ma **non implementato** in V1
-- [ ] Una sola istanza per account (config flow con unique_id = email)
-- [ ] Solo property `enabled` standard gestita; modelli non standard richiedono `/diagnose` + estensione manuale del bridge
+The end user adds **one GitHub URL** to both HACS (as a custom repository) and
+the add-on store, then does two installs.
 
-### Bug/rough edge minori da sistemare
+| # | Item | Status |
+|---|------|--------|
+| 1 | Public GitHub repo | ✅ created (`SimoneAvogadro/ha-eufy-privacy`) |
+| 2 | `hacs.json` in root | ✅ `{name, render_readme, homeassistant}` |
+| 3 | `custom_components/` in root | ✅ standard layout |
+| 4 | `manifest.json` `documentation` / `issue_tracker` | ✅ real URLs |
+| 5 | `manifest.json` `codeowners` | ✅ `["@SimoneAvogadro"]` |
+| 6 | Release / tag | ✅ tag `v0.1.0` + GitHub Release |
+| 7 | `repository.yaml` for the add-on | ✅ present |
 
-- `Dockerfile` copia `src/package-lock.json*` ma **il lockfile non esiste** →
-  `npm ci` fallisce e cade su `npm install` (funziona ma non riproducibile).
-  Fix: committare un `package-lock.json` in `src/`.
-- `manifest.json` ha URL placeholder: `documentation`/`issue_tracker` =
-  `https://github.com/local/eufy_privacy`, `codeowners: []`.
-- `addon-eufy-bridge/Dockerfile` usa `node:20-alpine` diretto (non base image HA):
-  ok come add-on locale, niente bashio/s6 — accettabile per ora.
+## Status: DONE
 
-## Promozione a progetto dedicato
+- [x] Complete Node.js add-on: REST + WS, token auth, clean shutdown, client-side backoff
+- [x] Config flow with granular error handling (CAPTCHA / 2FA / bridge_token / unreachable / unknown)
+- [x] Push-driven coordinator + reconciliation heartbeat; session re-init on expired Eufy token
+- [x] WS consumer with exponential-backoff reconnection + post-reconnect refresh
+- [x] Entities: `switch.<cam>_privacy`, `binary_sensor.<cam>_online`, per-camera device registry
+- [x] `eufy_privacy.set_privacy_mode(serial, enabled)` service
+- [x] `en` + `it` translations, `services.yaml`, `strings.json` (error keys aligned with config_flow)
+- [x] `/diagnose` endpoint to identify the privacy property ID on new models
+- [x] `iot_class: local_push` correct; `requirements: []` correct (logic in the bridge, not Python)
+- [x] README with add-on + integration install + 10 end-to-end verification steps
+- [x] Mono-repo packaging: `hacs.json`, `repository.yaml`, real `manifest.json` URLs, git + `v0.1.0` release
+- [x] All docs in English
 
-**Autosufficiente**: il bridge reimplementa internamente la logica privacy e il
-diagnose; **non importa nulla** da `list.js`/`checkStatus.js`/`privacy.js` del
-repo padre. La cartella `HA/` può diventare la root di un nuovo repo as-is.
-Nessun git inizializzato attualmente.
+## Status: MISSING / known limits
 
-## Distribuzione — equivoco da chiarire
+- [ ] **Never verified end-to-end on a real HAOS** (the README verification is a checklist, not a report)
+- [ ] No tests (Python or Node)
+- [ ] Snapshot / `camera` entity: described in the README but **not implemented** in V1
+- [ ] One instance per account (config flow with unique_id = email)
+- [ ] Only the standard `enabled` property handled; non-standard models need `/diagnose` + a manual bridge extension
 
-⚠️ **HACS NON distribuisce add-on.** Gestisce integrazioni, card Lovelace, temi,
-ecc. Quindi:
+### Minor rough edges
 
-- `custom_components/eufy_privacy/` → distribuibile via **HACS** (categoria integration)
-- `addon-eufy-bridge/` → distribuibile SOLO via **add-on repository**
-  (Settings → Add-ons → Repositories), meccanismo separato
+- `Dockerfile` copies `src/package-lock.json*` but **the lockfile doesn't exist**
+  → `npm ci` fails and falls back to `npm install` (works but not reproducible).
+  Fix: commit a `package-lock.json` in `src/`.
+- `eufy-bridge/Dockerfile` uses `node:20-alpine` directly (not an HA base image):
+  fine as a local add-on, no bashio/s6 — acceptable for now.
 
-L'utente finale farà **due installazioni**. È fattibile un **mono-repo** che fa
-sia da add-on repository sia da repo HACS (pattern comune).
+## Proposed next steps
 
-### Blocker per la sola integrazione su HACS
-
-| # | Blocker | Stato | Serve |
-|---|---------|-------|-------|
-| 1 | Repo GitHub pubblico | nessun git | crearlo |
-| 2 | `hacs.json` in root | assente | `{"name": "Eufy Privacy"}` |
-| 3 | Struttura repo | `HA/custom_components/...` | `custom_components/` in root (o `content_in_root` in hacs.json) |
-| 4 | `manifest.json` `documentation` / `issue_tracker` | placeholder `github.com/local/...` | URL reali |
-| 5 | `manifest.json` `codeowners` | `[]` | almeno `["@<utente-github>"]` |
-| 6 | Release/tag GitHub | nessuna | tag SemVer o default branch |
-
-### Per l'add-on come repository
-
-- `repository.yaml` (o `.json`) nella root del repo
-- `config.yaml` add-on ok; valutare `build.yaml` con base image HA se si vuole build multi-arch gestita
-
-## Prossimi passi proposti (al riavvio nel nuovo folder)
-
-1. Inizializzare git nel nuovo folder, struttura mono-repo:
-   ```
-   <repo-root>/
-   ├── hacs.json
-   ├── repository.yaml          ← add-on repository
-   ├── README.md
-   ├── custom_components/eufy_privacy/
-   └── eufy-bridge/             ← (ex addon-eufy-bridge)
-   ```
-2. Sistemare `manifest.json` (URL reali + codeowners).
-3. Aggiungere `package-lock.json` al bridge e committarlo.
-4. (Opzionale) primo test end-to-end su HAOS reale + report.
-5. (Futuro) snapshot/camera entity.
-
-**Dati che servono per chiudere il packaging:** username GitHub (per `codeowners`)
-e URL del repo (per `documentation`/`issue_tracker`).
+1. Commit a `package-lock.json` for the bridge (reproducible builds).
+2. (Optional) first end-to-end test on a real HAOS + report.
+3. (Future) snapshot / `camera` entity — new bridge endpoint + `camera` entity,
+   no architecture change.

@@ -3,41 +3,41 @@
     "step": {
       "user": {
         "title": "Eufy Privacy",
-        "description": "Inserisci le credenziali Eufy. Il bridge Add-on deve essere già in esecuzione.",
+        "description": "Enter your Eufy credentials. The bridge add-on must already be running.",
         "data": {
           "email": "Email",
           "password": "Password",
           "country": "Country (ISO-2)",
           "language": "Language",
           "bridge_url": "Bridge URL",
-          "bridge_token": "Bridge token (opzionale)"
+          "bridge_token": "Bridge token (optional)"
         }
       }
     },
     "error": {
-      "bridge_unreachable": "Impossibile raggiungere il bridge add-on. Verifica che sia installato e in esecuzione.",
-      "bridge_token_invalid": "Il bridge ha rifiutato il token. Recupera /data/bridge_token dall'add-on.",
-      "captcha_required": "Eufy richiede CAPTCHA: apri l'app Eufy Security sul telefono e rifai login per sbloccare.",
-      "two_factor_required": "Eufy richiede 2FA: completa il login dall'app mobile e riprova.",
-      "invalid_auth": "Credenziali Eufy non valide.",
-      "unknown": "Errore imprevisto. Controlla i log."
+      "bridge_unreachable": "Cannot reach the bridge add-on. Make sure it is installed and started.",
+      "bridge_token_invalid": "The bridge rejected the token. Read /data/bridge_token from the add-on.",
+      "captcha_required": "Eufy requires CAPTCHA: open the Eufy Security mobile app and sign in again to clear it.",
+      "two_factor_required": "Eufy requires 2FA: complete the login from the mobile app and retry.",
+      "invalid_auth": "Invalid Eufy credentials.",
+      "unknown": "Unexpected error. Check the logs."
     },
     "abort": {
-      "already_configured": "Questo account è già configurato."
+      "already_configured": "This account is already configured."
     }
   },
   "services": {
     "set_privacy_mode": {
       "name": "Set Privacy Mode",
-      "description": "Attiva o disattiva la modalità privacy su una telecamera.",
+      "description": "Enable or disable privacy mode on a camera.",
       "fields": {
         "serial": {
           "name": "Serial",
-          "description": "Numero di serie della camera."
+          "description": "Camera serial number."
         },
         "enabled": {
           "name": "Enabled",
-          "description": "true = privacy attiva, false = privacy disattiva."
+          "description": "true = privacy on, false = privacy off."
         }
       }
     }

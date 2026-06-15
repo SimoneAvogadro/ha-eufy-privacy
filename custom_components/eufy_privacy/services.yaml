@@ -1,17 +1,17 @@
 set_privacy_mode:
   name: Set Privacy Mode
-  description: Attiva o disattiva la modalità privacy su una telecamera Eufy.
+  description: Enable or disable privacy mode on a Eufy camera.
   fields:
     serial:
       name: Serial Number
-      description: Numero di serie della telecamera (es. T8410P1234567).
+      description: Camera serial number (e.g. T8410P1234567).
       required: true
       example: T8410P1234567
       selector:
         text:
     enabled:
       name: Privacy Enabled
-      description: true = privacy attiva (camera spenta), false = privacy disattiva (camera in funzione).
+      description: true = privacy on (camera off), false = privacy off (camera running).
       required: true
       example: true
       selector:
