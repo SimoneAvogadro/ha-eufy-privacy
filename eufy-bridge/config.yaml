@@ -1,6 +1,6 @@
 name: Eufy Bridge
 description: Node.js sidecar for the Eufy Privacy integration
-version: "0.1.0"
+version: "0.1.1"
 slug: eufy_bridge
 init: false
 startup: services
