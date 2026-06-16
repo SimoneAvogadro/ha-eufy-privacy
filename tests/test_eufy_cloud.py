@@ -99,6 +99,18 @@ def test_client_headers_and_state_roundtrip():
     assert client2.user_id == "uid123"
 
 
+def test_openudid_generated_when_missing():
+    # Il server rifiuta il login se Openudid è vuoto (code 10000): il client
+    # deve generarne uno e includerlo negli header e nello stato persistito.
+    client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw")
+    assert client.openudid
+    assert len(client.openudid) == 16
+    assert client._headers()["Openudid"] == client.openudid
+    # stabile attraverso export/import dello stato
+    client2 = ec_lib.EufyCloudClient.from_state("a@b.c", "pw", client.export_state())
+    assert client2.openudid == client.openudid
+
+
 # ── Task 6 ──────────────────────────────────────────────────────────────────
 
 def test_resolve_api_base(monkeypatch):

@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass, field
 
@@ -174,7 +175,10 @@ class EufyCloudClient:
         self.country = country.upper()
         self.email = email
         self.password = password
-        self.openudid = openudid
+        # L'openudid identifica il "device" verso il cloud: il server rifiuta il
+        # login (code 10000, "openudid is null") se manca. Se non fornito ne
+        # genera uno casuale stabile (16 hex), poi persistito in export_state.
+        self.openudid = openudid or secrets.token_hex(8)
         if client_private_key:
             self.client_private_key = client_private_key
         else:
