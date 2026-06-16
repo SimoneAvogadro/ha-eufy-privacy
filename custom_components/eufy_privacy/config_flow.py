@@ -25,6 +25,7 @@ class EufyPrivacyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._client: EufyCloudClient | None = None
         self._data: dict = {}
         self._captcha_id: str = ""
+        self._captcha_image: str = ""
         self._reauth_entry = None
 
     async def async_step_user(self, user_input=None):
@@ -49,7 +50,7 @@ class EufyPrivacyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="captcha",
                 data_schema=vol.Schema({vol.Required("answer"): str}),
-                description_placeholders={"captcha_id": self._captcha_id},
+                description_placeholders={"captcha_image": self._captcha_image},
             )
         return await self._attempt(
             lambda: self._client.submit_captcha(self._captcha_id, user_input["answer"]))
@@ -101,6 +102,7 @@ class EufyPrivacyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_2fa()
         if result.status == "need_captcha":
             self._captcha_id = result.captcha_id
+            self._captcha_image = result.captcha_image
             return await self.async_step_captcha()
         return self._show_error()
 
