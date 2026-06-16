@@ -185,6 +185,21 @@ def test_list_cameras_decrypts_and_parses(monkeypatch):
     assert cams[0].privacy_on is False
 
 
+def test_list_cameras_empty_data_returns_empty(monkeypatch):
+    # code==0 ma nessun dato (account senza camere condivise) => [] non errore
+    client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw", api_base="https://x")
+    monkeypatch.setattr(client, "_post", lambda e, d: {"code": 0, "msg": "Operazione completata.", "data": ""})
+    assert client.list_cameras() == []
+
+
+def test_list_cameras_raises_on_error_code(monkeypatch):
+    client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw", api_base="https://x")
+    monkeypatch.setattr(client, "_post", lambda e, d: {"code": 401, "msg": "no"})
+    import pytest
+    with pytest.raises(ec_lib.EufyCloudError):
+        client.list_cameras()
+
+
 def test_set_privacy_sends_string_values(monkeypatch):
     client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw", api_base="https://x")
     cam = ec_lib.EufyCamera("Box", "SN1", "SN1", "T8419", False, {1035, 6250})

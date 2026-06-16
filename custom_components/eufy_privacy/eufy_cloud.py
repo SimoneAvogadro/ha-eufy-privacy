@@ -376,13 +376,25 @@ class EufyCloudClient:
         }
 
     def list_cameras(self) -> list:
-        """Recupera e decodifica la lista delle telecamere dall'API."""
+        """Recupera e decodifica la lista delle telecamere dall'API.
+
+        `code != 0` è un errore vero. Invece `code == 0` con dati vuoti è uno
+        stato VALIDO: l'account non ha (ancora) telecamere visibili/condivise →
+        ritorna [] senza errori (l'integrazione si configura con 0 entità).
+        """
         resp = self._post(EP_DEVICE_LIST, self._device_list_body())
-        if resp.get("code") != CODE_OK or not resp.get("data"):
+        if resp.get("code") != CODE_OK:
             raise EufyCloudError(
                 f"device_list fallita: code={resp.get('code')} msg={resp.get('msg')}"
             )
-        return parse_cameras(self._decrypt(resp["data"]))
+        data = resp.get("data")
+        if not data:
+            _LOGGER.warning(
+                "Nessuna telecamera visibile per questo account Eufy "
+                "(device_list vuota). Verifica la condivisione dei dispositivi."
+            )
+            return []
+        return parse_cameras(self._decrypt(data))
 
     def set_privacy(self, camera, on: bool):
         """Imposta la modalità privacy sulla telecamera indicata."""
