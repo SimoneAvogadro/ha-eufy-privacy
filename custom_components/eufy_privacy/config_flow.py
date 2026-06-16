@@ -50,7 +50,12 @@ class EufyPrivacyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="captcha",
                 data_schema=vol.Schema({vol.Required("answer"): str}),
-                description_placeholders={"captcha_image": self._captcha_image},
+                # passo entrambi i placeholder: così una traduzione vecchia
+                # ancora in cache (che usa {captcha_id}) non va in MISSING_VALUE.
+                description_placeholders={
+                    "captcha_image": self._captcha_image,
+                    "captcha_id": self._captcha_id,
+                },
             )
         return await self._attempt(
             lambda: self._client.submit_captcha(self._captcha_id, user_input["answer"]))
