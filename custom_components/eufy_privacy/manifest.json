@@ -1,0 +1,12 @@
+{
+  "domain": "eufy_privacy",
+  "name": "Eufy Privacy (pure-Python)",
+  "version": "0.2.0",
+  "documentation": "https://github.com/SimoneAvogadro/ha-eufy-privacy",
+  "issue_tracker": "https://github.com/SimoneAvogadro/ha-eufy-privacy/issues",
+  "dependencies": [],
+  "codeowners": ["@SimoneAvogadro"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "config_flow": true
+}

@@ -1,0 +1,18 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Account Eufy",
+        "data": {"email": "Email", "password": "Password", "country": "Paese"}
+      },
+      "2fa": {"title": "Verifica 2FA", "data": {"code": "Codice ricevuto via email"}},
+      "captcha": {
+        "title": "Captcha",
+        "description": "Risolvi il captcha (id: {captcha_id})",
+        "data": {"answer": "Risposta captcha"}
+      }
+    },
+    "error": {"auth_failed": "Autenticazione fallita. Controlla le credenziali."},
+    "abort": {"already_configured": "Account già configurato."}
+  }
+}
