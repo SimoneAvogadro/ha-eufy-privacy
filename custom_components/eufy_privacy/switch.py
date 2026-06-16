@@ -1,14 +1,19 @@
 """Switch privacy: uno per camera. assumed_state (nessun polling automatico)."""
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .eufy_cloud import EufyCloudError
+
+# Secondi di attesa dopo un comando prima di rileggere lo stato reale: la camera
+# applica il flag privacy con un ritardo di propagazione (cloud -> dispositivo).
+REFRESH_AFTER_SET_DELAY = 15
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
@@ -30,6 +35,7 @@ class EufyPrivacySwitch(CoordinatorEntity, SwitchEntity):
         self._serial = serial
         self._attr_unique_id = f"{serial}_privacy"
         self._optimistic = None
+        self._cancel_refresh = None
 
     @property
     def _camera(self):
@@ -70,8 +76,26 @@ class EufyPrivacySwitch(CoordinatorEntity, SwitchEntity):
             raise HomeAssistantError(f"Impossibile impostare la privacy: {err}") from err
         self._optimistic = on
         self.async_write_ha_state()
+        # Programma un refresh ritardato: lo switch mostra subito lo stato
+        # ottimistico, poi dopo la propagazione rilegge lo stato reale dal cloud.
+        if self._cancel_refresh is not None:
+            self._cancel_refresh()
+        self._cancel_refresh = async_call_later(
+            self.hass, REFRESH_AFTER_SET_DELAY, self._async_delayed_refresh
+        )
 
+    async def _async_delayed_refresh(self, _now) -> None:
+        self._cancel_refresh = None
+        await self.coordinator.async_request_refresh()
+
+    @callback
     def _handle_coordinator_update(self) -> None:
         # dopo un refresh reale, abbandona lo stato ottimistico
         self._optimistic = None
         super()._handle_coordinator_update()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._cancel_refresh is not None:
+            self._cancel_refresh()
+            self._cancel_refresh = None
+        await super().async_will_remove_from_hass()

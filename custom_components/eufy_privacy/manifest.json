@@ -1,7 +1,7 @@
 {
   "domain": "eufy_privacy",
   "name": "Eufy Privacy (pure-Python)",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "documentation": "https://github.com/SimoneAvogadro/ha-eufy-privacy",
   "issue_tracker": "https://github.com/SimoneAvogadro/ha-eufy-privacy/issues",
   "dependencies": [],
