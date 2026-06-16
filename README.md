@@ -52,11 +52,8 @@ pip install -r requirements-test.txt
 python3 -m pytest
 ```
 
-## Limitazioni note (0.1.0)
+## Limitazioni note (0.2.0)
 
-- **Nessun reauth flow in UI**: se il token scade e serve un nuovo 2FA, le entità diventano
-  `unavailable` (premi *Aggiorna stato* per ritentare; nel caso peggiore rimuovi e ri-aggiungi
-  l'integrazione).
 - **Conflitto di sessione (stesso account)**: l'app mobile Eufy o un'altra integrazione che
   usa lo stesso account possono invalidare la sessione. Il design senza polling riduce molto
   il problema.
@@ -65,5 +62,5 @@ python3 -m pytest
 
 ## Stato
 
-`0.1.0` — libreria coperta da unit test e validata contro un account reale; lo strato HA è
-verificato e va validato sulla propria istanza al primo deploy.
+`0.2.0` — libreria coperta da unit test e validata contro un account reale; reauth flow in UI
+su scadenza token. Lo strato HA è verificato e va validato sulla propria istanza al primo deploy.
