@@ -152,6 +152,14 @@ class EufyCloudError(Exception):
     """Errore durante la comunicazione con il cloud Eufy."""
 
 
+class EufyAuthRequired(EufyCloudError):
+    """Il re-login dopo un 401 richiede interazione (2FA/captcha): serve reauth."""
+
+    def __init__(self, login_result=None):
+        super().__init__("re-login richiede 2FA/captcha")
+        self.login_result = login_result
+
+
 # ── Risultato login ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -260,14 +268,25 @@ class EufyCloudClient:
         self.api_base = "https://security-app-eu.eufylife.com"
         return self.api_base
 
-    def _post(self, endpoint: str, data: dict) -> dict:
-        """POST JSON verso l'API Eufy; risolve la base se mancante."""
+    def _post(self, endpoint: str, data: dict, _allow_relogin: bool = True) -> dict:
+        """POST JSON verso l'API Eufy; risolve la base se mancante.
+
+        Su 401 (token invalidato lato server, es. sessione spodestata) prova un
+        re-login automatico e ritenta una volta. Se il re-login richiede
+        2FA/captcha solleva EufyAuthRequired (→ reauth flow in UI).
+        """
         if not self.api_base:
             self.resolve_api_base()
         r = self._session.post(
             f"{self.api_base}/{endpoint}", json=data,
             headers=self._headers(), timeout=20,
         )
+        if r.status_code == 401 and _allow_relogin and endpoint != EP_LOGIN:
+            _LOGGER.info("Token Eufy invalidato (401 su %s): eseguo re-login.", endpoint)
+            res = self.login()
+            if res.status == "ok":
+                return self._post(endpoint, data, _allow_relogin=False)
+            raise EufyAuthRequired(res)
         if r.status_code != 200:
             raise EufyCloudError(f"HTTP {r.status_code} su {endpoint}: {r.text[:200]}")
         return r.json()

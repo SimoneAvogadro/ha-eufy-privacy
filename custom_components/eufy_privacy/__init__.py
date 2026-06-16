@@ -16,18 +16,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     state.setdefault("country", data.get(CONF_COUNTRY, "IT"))
     client = EufyCloudClient.from_state(data[CONF_EMAIL], data[CONF_PASSWORD], state)
 
-    coordinator = EufyPrivacyCoordinator(hass, client)
+    coordinator = EufyPrivacyCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # persisti eventuale token rinnovato
-    new_state = await hass.async_add_executor_job(client.export_state)
-    if new_state != data.get("state"):
-        hass.config_entries.async_update_entry(
-            entry, data={**data, "state": new_state}
-        )
     return True
 
 

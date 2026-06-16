@@ -246,3 +246,44 @@ def test_ensure_token_relogins_when_expired(monkeypatch):
     assert client.token == "NEW"
     client.ensure_token()
     assert calls["login"] == 1
+
+
+# ── 401 handling ─────────────────────────────────────────────────────────────
+
+class _Resp:
+    def __init__(self, code, body=None):
+        self.status_code = code
+        self._b = body or {"code": 0, "data": "ok"}
+        self.text = ""
+
+    def json(self):
+        return self._b
+
+
+def test_post_relogins_on_401_and_retries(monkeypatch):
+    client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw", api_base="https://x")
+    calls = {"post": 0, "login": 0}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls["post"] += 1
+        return _Resp(401) if calls["post"] == 1 else _Resp(200, {"code": 0, "data": "ok"})
+
+    def fake_login():
+        calls["login"] += 1
+        client.token = "NEW"
+        return ec_lib.LoginResult(status="ok")
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "login", fake_login)
+    resp = client._post("v2/house/device_list", {})
+    assert resp == {"code": 0, "data": "ok"}
+    assert calls["login"] == 1 and calls["post"] == 2
+
+
+def test_post_401_raises_auth_required_when_relogin_needs_2fa(monkeypatch):
+    client = ec_lib.EufyCloudClient(country="IT", email="a@b.c", password="pw", api_base="https://x")
+    monkeypatch.setattr(client._session, "post", lambda *a, **k: _Resp(401))
+    monkeypatch.setattr(client, "login", lambda: ec_lib.LoginResult(status="need_2fa"))
+    import pytest
+    with pytest.raises(ec_lib.EufyAuthRequired):
+        client._post("v2/house/device_list", {})
