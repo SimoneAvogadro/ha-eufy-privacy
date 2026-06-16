@@ -10,9 +10,17 @@
         "title": "Captcha",
         "description": "Risolvi il captcha (id: {captcha_id})",
         "data": {"answer": "Risposta captcha"}
+      },
+      "reauth_confirm": {
+        "title": "Ri-autenticazione Eufy",
+        "description": "La sessione per {email} è scaduta. Conferma per rifare il login (inserisci la password solo se è cambiata).",
+        "data": {"password": "Password (opzionale)"}
       }
     },
     "error": {"auth_failed": "Autenticazione fallita. Controlla le credenziali."},
-    "abort": {"already_configured": "Account già configurato."}
+    "abort": {
+      "already_configured": "Account già configurato.",
+      "reauth_successful": "Ri-autenticazione completata."
+    }
   }
 }
