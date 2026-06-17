@@ -37,11 +37,16 @@ def test_encrypt_decrypt_roundtrip():
     assert dec == payload
 
 
-def test_is_privacy_on_reads_1035_then_6250():
-    assert ec_lib.is_privacy_on({1035: "1"}) is True
+def test_is_privacy_on_prioritizes_6250_over_1035():
+    # Caso reale (letto dal cloud su Box T8419 in privacy da app): la privacy
+    # si riflette SOLO in 6250; 1035 (DeviceEnabled) resta "0" anche in privacy.
+    # Quindi 6250 e' autorevole e va letto PRIMA di 1035.
+    assert ec_lib.is_privacy_on({1035: "0", 6250: "1"}) is True   # Box in privacy
+    assert ec_lib.is_privacy_on({1035: "0", 6250: "0"}) is False  # camera attiva
+    assert ec_lib.is_privacy_on({6250: "1"}) is True
+    assert ec_lib.is_privacy_on({1035: "1"}) is True              # fallback se 6250 assente
     assert ec_lib.is_privacy_on({1035: "0"}) is False
-    assert ec_lib.is_privacy_on({6250: "1"}) is True      # fallback
-    assert ec_lib.is_privacy_on({}) is False               # default
+    assert ec_lib.is_privacy_on({}) is False                       # default
 
 
 def test_build_privacy_params_uses_strings_for_present_types():

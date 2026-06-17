@@ -84,8 +84,15 @@ def decrypt_api_data(b64data: str, key: bytes) -> str:
 
 
 def is_privacy_on(params: dict) -> bool:
-    """True se la privacy è attiva. Legge 1035, poi 6250. Default False."""
-    for pt in (PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250):
+    """True se la privacy è attiva.
+
+    6250 è l'indicatore di privacy AUTOREVOLE su T8419/T8W11C: quando la privacy
+    è impostata da app, 6250="1" mentre 1035 (DeviceEnabled) resta "0". Per questo
+    leggiamo 6250 PRIMA di 1035 (verificato leggendo i param grezzi dal cloud con
+    Box in privacy: 1035="0", 6250="1"). 1035 resta come fallback per eventuali
+    modelli che non espongono 6250. Default False.
+    """
+    for pt in (PARAM_PRIVACY_6250, PARAM_DEVS_SWITCH):
         if pt in params and params[pt] is not None:
             return str(params[pt]) == "1"
     return False
