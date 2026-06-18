@@ -69,8 +69,9 @@ class EufyPrivacySwitch(CoordinatorEntity, SwitchEntity):
         if cam is None:
             return
         try:
+            # Il toggle privacy viaggia in P2P/PPCS: il cloud non comanda la camera.
             await self.hass.async_add_executor_job(
-                self.coordinator.client.set_privacy, cam, on
+                self.coordinator.client.toggle_privacy_p2p, cam, on
             )
         except EufyCloudError as err:
             raise HomeAssistantError(f"Impossibile impostare la privacy: {err}") from err

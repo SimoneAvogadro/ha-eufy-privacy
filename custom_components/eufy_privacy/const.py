@@ -11,6 +11,9 @@ EP_TRUST_LIST = "v1/app/trust_device/list"
 EP_TRUST_ADD = "v1/app/trust_device/add"
 EP_DEVICE_LIST = "v2/house/device_list"
 EP_SET_PARAMS = "v1/app/upload_devs_params"
+# Per il toggle privacy via P2P (PPCS): station list + chiavi DSK
+EP_STATION_LIST = "v2/house/station_list"
+EP_DSK_KEYS = "v1/app/equipment/get_dsk_keys"
 
 # Chiave pubblica server "bootstrap" usata SOLO per cifrare la password al login
 # (poi il server restituisce la propria server_secret_info.public_key).

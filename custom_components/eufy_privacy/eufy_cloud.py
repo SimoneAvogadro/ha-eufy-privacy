@@ -25,7 +25,7 @@ try:
     from .const import (
         BASE_HEADERS, DOMAIN_BASE,
         EP_DOMAIN, EP_LOGIN, EP_SEND_VERIFY, EP_TRUST_ADD,
-        EP_DEVICE_LIST, EP_SET_PARAMS,
+        EP_DEVICE_LIST, EP_SET_PARAMS, EP_STATION_LIST, EP_DSK_KEYS,
         SERVER_PUBLIC_KEY_BOOTSTRAP,
         CODE_OK, CODE_NEED_VERIFY_CODE, CODE_NEED_CAPTCHA, CODE_CAPTCHA_ERROR,
         PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250, PRIVACY_PARAM_TYPES,
@@ -34,7 +34,7 @@ except ImportError:  # esecuzione come modulo standalone (test/CLI)
     from const import (
         BASE_HEADERS, DOMAIN_BASE,
         EP_DOMAIN, EP_LOGIN, EP_SEND_VERIFY, EP_TRUST_ADD,
-        EP_DEVICE_LIST, EP_SET_PARAMS,
+        EP_DEVICE_LIST, EP_SET_PARAMS, EP_STATION_LIST, EP_DSK_KEYS,
         SERVER_PUBLIC_KEY_BOOTSTRAP,
         CODE_OK, CODE_NEED_VERIFY_CODE, CODE_NEED_CAPTCHA, CODE_CAPTCHA_ERROR,
         PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250, PRIVACY_PARAM_TYPES,
@@ -436,6 +436,66 @@ class EufyCloudClient:
             raise EufyCloudError(
                 f"set privacy fallita: code={resp.get('code')} msg={resp.get('msg')}"
             )
+        return True
+
+    # ── Input per il toggle privacy via P2P (PPCS) ───────────────────────────
+
+    def station_list(self) -> list:
+        """Lista stazioni (per il P2P). `data` è cifrata → _decrypt.
+
+        Ogni stazione espone p2p_did, app_conn, ip_addr, station_sn e
+        member.admin_user_id, necessari per stabilire la sessione P2P.
+        """
+        resp = self._post(EP_STATION_LIST, {
+            "device_sn": "", "num": 1000, "orderby": "", "page": 0,
+            "station_sn": "", "time_zone": 3600000,
+            "transaction": str(int(time.time() * 1000)),
+        })
+        if resp.get("code") != CODE_OK:
+            raise EufyCloudError(f"station_list fallita: code={resp.get('code')} msg={resp.get('msg')}")
+        data = resp.get("data")
+        return self._decrypt(data) if data else []
+
+    def get_dsk_keys(self, station_sn: str) -> tuple:
+        """Chiave DSK per il lookup P2P (scade ~30 min). Risposta NON cifrata."""
+        resp = self._post(EP_DSK_KEYS, {
+            "invalid_dsks": {station_sn: ""},
+            "station_sns": [station_sn],
+            "transaction": str(int(time.time() * 1000)),
+        })
+        if resp.get("code") != CODE_OK:
+            raise EufyCloudError(f"get_dsk_keys fallita: code={resp.get('code')} msg={resp.get('msg')}")
+        for k in (resp.get("data") or {}).get("dsk_keys", []):
+            if k.get("station_sn") == station_sn:
+                return k.get("dsk_key"), k.get("expiration")
+        raise EufyCloudError(f"DSK key non trovata per {station_sn}")
+
+    def toggle_privacy_p2p(self, camera, on: bool, channel: int = 0) -> bool:
+        """Commuta la privacy via P2P/PPCS (il cloud NON comanda la camera).
+
+        Recupera p2p_did/app_conn/admin_user_id da station_list e la DSK key,
+        poi apre una sessione P2P e invia il comando enable/disable. Sincrono.
+        """
+        try:
+            from .p2p_session import P2PSession, decode_p2p_cloud_ips
+        except ImportError:
+            from p2p_session import P2PSession, decode_p2p_cloud_ips
+        station_sn = camera.station_sn or camera.serial
+        station = next(
+            (s for s in self.station_list() if s.get("station_sn") == station_sn), None
+        )
+        if not station:
+            raise EufyCloudError(f"stazione {station_sn} non trovata per il P2P")
+        dsk, _exp = self.get_dsk_keys(station_sn)
+        cloud_ips = decode_p2p_cloud_ips(station["app_conn"])
+        admin = station["member"]["admin_user_id"]
+        session = P2PSession(station_sn, station["p2p_did"], dsk, admin, cloud_ips, channel=channel)
+        try:
+            session.connect()
+            if not session.set_privacy(on):
+                raise EufyCloudError("comando privacy P2P non confermato (nessun ACK)")
+        finally:
+            session.close()
         return True
 
     # ── Task 9: rinnovo automatico del token ─────────────────────────────────
