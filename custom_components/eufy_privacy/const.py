@@ -27,6 +27,43 @@ PARAM_DEVS_SWITCH = 1035
 PARAM_PRIVACY_6250 = 6250
 PRIVACY_PARAM_TYPES = (PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250)
 
+# ── Eventi push camera ───────────────────────────────────────────────────────
+# Codici da IndoorPushEvent/DoorbellPushEvent (eufy-security-client push/types.js).
+# C200/C210 sono indoor cam: motion/face/sound/crying/pet/vehicle.
+EVENT_MOTION = 3101
+EVENT_PERSON = 3102      # FACE_DETECTION
+EVENT_CRYING = 3104
+EVENT_SOUND = 3105
+EVENT_PET = 3106
+EVENT_VEHICLE = 3107
+# Mappa codice -> "kind" normalizzato esposto in HA.
+EVENT_TYPE_TO_KIND = {
+    EVENT_MOTION: "motion",
+    EVENT_PERSON: "person",
+    EVENT_CRYING: "sound",
+    EVENT_SOUND: "sound",
+    EVENT_PET: "pet",
+    EVENT_VEHICLE: "vehicle",
+}
+# Quali binary_sensor accende ogni kind (person accende anche motion).
+EVENT_KIND_TO_SENSORS = {
+    "motion": ("motion",),
+    "person": ("person", "motion"),
+    "pet": ("motion",),
+    "vehicle": ("motion",),
+    "sound": (),
+}
+
+# Broker MQTT push Eufy (username eufy_{user_id}, password = email).
+MQTT_HOST = "security-mqtt-eu.eufylife.com"
+MQTT_PORT = 8789
+
+# Segnali dispatcher per-serial (eventi push -> entita').
+SIGNAL_EVENT = f"{DOMAIN}_event_{{serial}}"
+SIGNAL_IMAGE = f"{DOMAIN}_image_{{serial}}"
+# Secondi prima dell'auto-off dei binary_sensor.
+AUTO_OFF_SECONDS = 30
+
 # Header di default replicati VERBATIM da eufy-security-client (device di test
 # tedesco). Non devono coincidere col paese dell'account: il cloud li ignora di
 # fatto e lo spike ha funzionato proprio con questi valori. Non "correggerli".

@@ -14,6 +14,18 @@ class EufyPrivacyCoordinator(DataUpdateCoordinator):
         super().__init__(hass, _LOGGER, name="eufy_privacy", update_interval=None)
         self.entry = entry
         self.client = client
+        # Cache delle station (per p2p_did, usato da camera.py per decode_image) e il listener push.
+        self.stations: dict = {}
+        self.listener = None
+
+    def load_stations(self) -> None:
+        """Carica/aggiorna la cache station (sync, da eseguire in executor)."""
+        self.stations = {s.get("station_sn"): s for s in self.client.station_list()}
+
+    def p2p_did_for(self, camera) -> str | None:
+        """p2p_did della station della camera (per decifrare le thumbnail evento)."""
+        station = self.stations.get(camera.station_sn or camera.serial)
+        return station.get("p2p_did") if station else None
 
     def _persist_state(self) -> None:
         """Salva nella config entry lo stato del client (token rinnovato, ecc.)."""

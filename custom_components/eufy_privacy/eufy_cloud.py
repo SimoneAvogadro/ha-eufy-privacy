@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ try:
         SERVER_PUBLIC_KEY_BOOTSTRAP,
         CODE_OK, CODE_NEED_VERIFY_CODE, CODE_NEED_CAPTCHA, CODE_CAPTCHA_ERROR,
         PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250, PRIVACY_PARAM_TYPES,
+        EVENT_TYPE_TO_KIND,
     )
 except ImportError:  # esecuzione come modulo standalone (test/CLI)
     from const import (
@@ -38,6 +40,7 @@ except ImportError:  # esecuzione come modulo standalone (test/CLI)
         SERVER_PUBLIC_KEY_BOOTSTRAP,
         CODE_OK, CODE_NEED_VERIFY_CODE, CODE_NEED_CAPTCHA, CODE_CAPTCHA_ERROR,
         PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250, PRIVACY_PARAM_TYPES,
+        EVENT_TYPE_TO_KIND,
     )
 
 _LOGGER = logging.getLogger(__name__)
@@ -151,6 +154,204 @@ def parse_cameras(decrypted_device_list: list) -> list:
 def md5_hex(s: str) -> str:
     """Restituisce l'MD5 esadecimale di una stringa UTF-8."""
     return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+
+def sha256_hex(s: str) -> str:
+    """SHA256 esadecimale (minuscolo) di una stringa UTF-8."""
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+# ── decode_image: decifratura delle thumbnail evento (port di http/utils.js) ──
+# La cam restituisce le immagini di evento (pic_url/cover_path) cifrate: header
+# ASCII "eufysecurity" + serial + code, poi i primi 256 byte del corpo in
+# AES-128-ECB con chiave DERIVATA da serial+p2p_did+code. Port byte-per-byte di
+# getIdSuffix/getImageBaseCode/getImageSeed/getImageKey/decodeImage, validato
+# contro vettori generati dalla lib JS (vedi tests/test_decode_image.py).
+
+def _js_parse_int(s: str) -> int:
+    """Mima Number.parseInt: prende il prefisso intero, ignora il resto."""
+    m = re.match(r"\s*([+-]?\d+)", s)
+    if not m:
+        raise ValueError(f"nessun intero in {s!r}")
+    return int(m.group(1))
+
+
+def get_id_suffix(p2p_did: str) -> int:
+    """Somma di cifre selezionate del segmento numerico del DID (getIdSuffix)."""
+    m = re.match(r"^[A-Z]+-(\d+)-[A-Z]+$", p2p_did)
+    if not m:
+        return 0
+    d = m.group(1)
+    num1, num2, num3, num4 = int(d[0]), int(d[1]), int(d[3]), int(d[5])
+    result = num1 + num2 + num3
+    if num3 < 5:
+        result += num3
+    return result + num4
+
+
+def get_image_base_code(serial: str, p2p_did: str) -> str:
+    """getImageBaseCode: coda del serial (offset dall'ultima cifra hex) + id-suffix."""
+    try:
+        nr = int(serial[-1], 16)
+    except ValueError:
+        nr = 0  # JS: parseInt NaN -> substring(0) (serial intero)
+    nr = (nr + 10) % 10
+    return f"{serial[nr:]}{get_id_suffix(p2p_did)}"
+
+
+def get_image_seed(p2p_did: str, code: str) -> str:
+    """getImageSeed: MD5(prefix+ncode) uppercase, con prefix=1000-idSuffix."""
+    ncode = _js_parse_int(code[2:])
+    prefix = 1000 - get_id_suffix(p2p_did)
+    return md5_hex(f"{prefix}{ncode}").upper()
+
+
+def get_image_key(serial: str, p2p_did: str, code: str) -> str:
+    """getImageKey: SHA256("01"+basecode+seed) + byte-mangling -> 32 hex UPPER.
+
+    La chiave AES e' i PRIMI 16 CARATTERI ASCII di questa stringa (non i byte hex
+    decodificati): vedi decode_image. Durante il loop i valori restano interi Python
+    (possibili negativi/>255), mascherati &0xFF solo alla fine (come Buffer.from in JS).
+    """
+    data = f"01{get_image_base_code(serial, p2p_did)}{get_image_seed(p2p_did, code)}"
+    hb = list(bytes.fromhex(sha256_hex(data)))  # 32 interi
+    start_byte = hb[10]
+    for i in range(32):
+        byte = hb[i]
+        fixed_byte = start_byte if i == 31 else hb[i + 1]
+        if i == 31 or (i & 1) != 0:
+            hb[10] = fixed_byte
+            if byte > 126 or hb[10] > 126:
+                if byte < hb[10] or (byte - hb[10]) == 0:
+                    hb[i] = hb[10] - byte
+                else:
+                    hb[i] = byte - hb[10]
+        elif byte < 125 or fixed_byte < 125:
+            hb[i] = fixed_byte + byte
+    return bytes(b & 0xFF for b in hb[16:]).hex().upper()
+
+
+def decode_image(p2p_did: str, data: bytes) -> bytes:
+    """decodeImage: se header "eufysecurity", decifra i primi 256 byte del corpo.
+
+    Difensiva: su qualsiasi errore (header non standard, code non numerico, lunghezza
+    insufficiente) ritorna `data` invariata — molte thumbnail cloud sono gia' JPEG in chiaro.
+    """
+    if len(data) < 12 or data[0:12] != b"eufysecurity":
+        return data
+    try:
+        serial = data[13:29].decode("utf-8", "ignore")
+        code = data[30:40].decode("utf-8", "ignore")
+        key = get_image_key(serial, p2p_did, code).encode("utf-8")[:16]
+        other = bytearray(data[41:])
+        enc = bytes(other[0:256])
+        dec = Cipher(algorithms.AES(key), modes.ECB()).decryptor()  # noqa: S305 (protocollo)
+        decrypted = dec.update(enc) + dec.finalize()
+        other[0:len(decrypted)] = decrypted
+        return bytes(other)
+    except Exception as err:  # noqa: BLE001 — fallback robusto per la camera entity
+        _LOGGER.debug("decode_image fallita, ritorno dato grezzo: %s", err)
+        return data
+
+
+def h264_to_jpeg(h264: bytes) -> bytes:
+    """Converte un bitstream H.264 Annex-B nel primo frame JPEG, via ffmpeg (presente su HA OS)."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "h264", "-i", "pipe:0", "-frames:v", "1", "-f", "mjpeg", "pipe:1"],
+            input=h264, capture_output=True, timeout=30,
+        )
+    except FileNotFoundError as err:
+        raise EufyCloudError("ffmpeg non trovato: impossibile convertire il frame in JPEG") from err
+    if proc.returncode != 0 or not proc.stdout:
+        raise EufyCloudError(f"ffmpeg fallito: {proc.stderr[:200].decode('utf-8', 'replace')}")
+    return proc.stdout
+
+
+# ── Eventi push (motion/person/sound/...) ────────────────────────────────────
+
+@dataclass
+class EufyPushEvent:
+    """Evento camera normalizzato da un messaggio push (MQTT/FCM)."""
+    serial: str
+    station_sn: str
+    event_type: int
+    kind: str                       # motion|person|sound|pet|vehicle
+    pic_url: str = ""
+    name: str = ""
+    push_count: int = 1
+    channel: int | None = None
+    cipher: str = ""
+    event_time: int | None = None
+    raw: dict = field(default_factory=dict)
+
+
+def _coerce_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_push_message(payload) -> "EufyPushEvent | None":
+    """Normalizza un messaggio push Eufy in un EufyPushEvent, o None se non e' un evento camera.
+
+    Accetta bytes/str (JSON) o dict gia' decodificato. Replica la struttura di
+    eufy-security-client (_normalizePushMessage): envelope con device_sn/station_sn e un
+    inner `payload` (anche come stringa JSON) con event_type/pic_url/push_count; tollera le
+    varianti a chiavi corte a (event_type), c (channel), k (cipher). DIFENSIVA: qualunque
+    cosa non riconosca -> None. Da ri-validare su payload reali (gate Spike A).
+    """
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8", "replace")
+    if isinstance(payload, str):
+        try:
+            env = json.loads(payload)
+        except (ValueError, TypeError):
+            return None
+    elif isinstance(payload, dict):
+        env = payload
+    else:
+        return None
+    if not isinstance(env, dict):
+        return None
+
+    inner = env.get("payload")
+    if isinstance(inner, str):
+        try:
+            inner = json.loads(inner)
+        except (ValueError, TypeError):
+            inner = None
+    if not isinstance(inner, dict):
+        inner = env  # forma "piatta": i campi evento sono al livello superiore
+
+    event_type = _coerce_int(
+        inner.get("event_type", inner.get("a", env.get("event_type", env.get("a"))))
+    )
+    if event_type is None:
+        return None
+    kind = EVENT_TYPE_TO_KIND.get(event_type)
+    if kind is None:
+        return None  # evento non-camera (mode/battery/...) -> ignorato
+
+    serial = env.get("device_sn") or inner.get("device_sn") or env.get("station_sn") or ""
+    station_sn = env.get("station_sn") or serial
+    channel = inner.get("channel", inner.get("c"))
+    return EufyPushEvent(
+        serial=serial,
+        station_sn=station_sn,
+        event_type=event_type,
+        kind=kind,
+        pic_url=inner.get("pic_url", "") or "",
+        name=inner.get("name") or env.get("device_name") or "",
+        push_count=_coerce_int(inner.get("push_count")) or 1,
+        channel=_coerce_int(channel) if channel is not None else None,
+        cipher=str(inner.get("cipher", inner.get("k", "")) or ""),
+        event_time=_coerce_int(env.get("event_time")),
+        raw=env,
+    )
 
 
 # ── Eccezione personalizzata ─────────────────────────────────────────────────
@@ -497,6 +698,51 @@ class EufyCloudClient:
         finally:
             session.close()
         return True
+
+    def get_event_image(self, pic_url: str, p2p_did: str) -> bytes:
+        """Scarica e decifra (decode_image) una thumbnail evento.
+
+        `p2p_did` viene dalla station (station_list). Molte thumbnail cloud sono gia'
+        JPEG in chiaro: in quel caso decode_image ritorna i byte invariati.
+        """
+        r = self._session.get(pic_url, timeout=20)
+        if r.status_code != 200:
+            raise EufyCloudError(f"HTTP {r.status_code} scaricando la thumbnail")
+        return decode_image(p2p_did, r.content)
+
+    def grab_snapshot_p2p(self, camera, channel: int = 0, timeout: float = 15.0,
+                          dump_path: str = None) -> bytes:
+        """Cattura un frame FRESCO via P2P e lo converte in JPEG (richiede ffmpeg).
+
+        Stesso setup di toggle_privacy_p2p (station lookup, dsk, cloud IPs), poi avvia il
+        livestream, accumula H.264 fino al primo keyframe e lo passa a ffmpeg. SINCRONA.
+        NB: il loop video P2P va validato live su una cam reale (vedi p2p_session.grab_keyframe).
+        """
+        try:
+            from .p2p_session import P2PSession, decode_p2p_cloud_ips, generate_rsa_keypair
+        except ImportError:
+            from p2p_session import P2PSession, decode_p2p_cloud_ips, generate_rsa_keypair
+        station_sn = camera.station_sn or camera.serial
+        station = next(
+            (s for s in self.station_list() if s.get("station_sn") == station_sn), None
+        )
+        if not station:
+            raise EufyCloudError(f"stazione {station_sn} non trovata per il P2P")
+        dsk, _exp = self.get_dsk_keys(station_sn)
+        cloud_ips = decode_p2p_cloud_ips(station["app_conn"])
+        admin = station["member"]["admin_user_id"]
+        session = P2PSession(station_sn, station["p2p_did"], dsk, admin, cloud_ips, channel=channel)
+        try:
+            session.connect()
+            priv, encryptkey = generate_rsa_keypair()
+            h264 = session.grab_keyframe(priv, encryptkey, timeout=timeout, dump_path=dump_path)
+        finally:
+            try:
+                session.stop_livestream()
+            except Exception:  # noqa: BLE001 — stop best-effort
+                pass
+            session.close()
+        return h264_to_jpeg(h264)
 
     # ── Task 9: rinnovo automatico del token ─────────────────────────────────
 

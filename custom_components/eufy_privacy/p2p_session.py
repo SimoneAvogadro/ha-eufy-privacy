@@ -21,6 +21,7 @@ import socket
 import struct
 import time
 
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # ── Tipi messaggio (p2p/types.js) ────────────────────────────────────────────
@@ -42,6 +43,11 @@ CMD_SET_PAYLOAD = 1350
 CMD_GATEWAYINFO = 1100
 CMD_PRIVACY = 6250
 ENC_TYPE = 1                    # encryptionType on-wire (verificato in cattura)
+
+# Comandi livestream (per lo snapshot fresco via P2P — Spike B)
+CMD_DOORBELL_SET_PAYLOAD = 1700     # wrapper string-payload usato dalle solo-cam (C200/C210)
+COMMAND_START_LIVESTREAM = 1000     # commandType nested dentro il payload 1700
+CMD_STOP_REALTIME_MEDIA = 1004      # stop livestream (sendCommandWithInt)
 
 CLOUD_LOOKUP_TABLE = bytes.fromhex(
     "4959433db5bf6da347534f6165e371e9677f02030badb3892b2f35c16b8b95"
@@ -124,6 +130,180 @@ def build_privacy_json(admin_user_id: str, privacy_on: bool, channel: int = 0) -
         "mChannel": channel, "mValue3": 0,
         "payload": {"switch": 1 if privacy_on else 0},
     }, separators=(",", ":"))
+
+
+# ── Livestream/snapshot: RSA + AES video + parsing frame (port di p2p/*.js) ───
+# Flusso (station.js/session.js): start = CMD_DOORBELL_SET_PAYLOAD(1700) con JSON nested
+# {commandType:1000, data:{accountId, encryptkey=<N pubblico hex>, streamtype}}. Il video
+# arriva come CMD_VIDEO_FRAME: header (20B) + chiave AES RSA-cifrata (128B a [22:150] se
+# signCode>0) + payload con i primi 128B in AES-128-ECB e il resto in chiaro. Stop = 1004.
+
+def generate_rsa_keypair():
+    """Coppia RSA-1024 per la sessione livestream. Ritorna (private_key, encryptkey_hex)."""
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    return priv, rsa_public_modulus_hex(priv)
+
+
+def rsa_public_modulus_hex(private_key) -> str:
+    """Modulo N (128 byte) in hex, come `encryptkey` on-wire (node-rsa: .n.subarray(1))."""
+    n = private_key.public_key().public_numbers().n
+    return n.to_bytes(128, "big").hex()
+
+
+def rsa_decrypt_aes_key(private_key, blob: bytes) -> bytes:
+    """Decifra (RSA PKCS1 v1.5) la chiave AES per-frame inviata dalla cam."""
+    return private_key.decrypt(blob, asym_padding.PKCS1v15())
+
+
+def decrypt_video_chunk(aes_key: bytes, data: bytes) -> bytes:
+    """AES-128-ECB NoPadding sui primi byte (cifrati) del payload video. len(data) %16==0."""
+    dec = Cipher(algorithms.AES(aes_key), modes.ECB()).decryptor()  # noqa: S305 (protocollo)
+    return dec.update(data) + dec.finalize()
+
+
+def build_livestream_start_json(admin_user_id: str, encryptkey_hex: str, streamtype: int = 1) -> str:
+    """Payload nested per avviare il livestream (streamtype 1=H.264, 2=H.265)."""
+    return json.dumps({
+        "commandType": COMMAND_START_LIVESTREAM,
+        "data": {"accountId": admin_user_id, "encryptkey": encryptkey_hex, "streamtype": streamtype},
+    }, separators=(",", ":"))
+
+
+def find_start_code(data: bytes) -> bool:
+    """True se `data` inizia con uno start-code H.264 (00 00 01 oppure 00 00 00 01)."""
+    if not data:
+        return False
+    if len(data) >= 4:
+        s = data[:4]
+        if (s[0] == 0 and s[1] == 0 and s[2] == 1) or (s[0] == 0 and s[1] == 0 and s[2] == 0 and s[3] == 1):
+            return True
+    elif len(data) == 3:
+        s = data[:3]
+        if s[0] == 0 and s[1] == 0 and s[2] == 1:
+            return True
+    return False
+
+
+def is_iframe(data: bytes) -> bool:
+    """True se il NAL (offset 3 o 4 dopo lo start-code) e' un tipo I-frame/SPS/PPS."""
+    valid = (64, 66, 68, 78, 101, 103)
+    if data and len(data) >= 5:
+        s = data[:5]
+        return s[3] in valid or s[4] in valid
+    return False
+
+
+def parse_video_frame_header(data: bytes) -> dict:
+    """Estrae i metadati dall'header (20 byte) di un CMD_VIDEO_FRAME."""
+    return {
+        "video_data_length": struct.unpack_from("<I", data, 0)[0],
+        "is_key_frame": data[4] == 1,
+        "stream_type": data[5],
+        "video_seq_no": struct.unpack_from("<H", data, 6)[0],
+        "video_fps": struct.unpack_from("<H", data, 8)[0],
+        "video_width": struct.unpack_from("<H", data, 10)[0],
+        "video_height": struct.unpack_from("<H", data, 12)[0],
+        "video_timestamp": int.from_bytes(data[14:20], "little"),
+    }
+
+
+def extract_video_frame(data: bytes, sign_code: int, private_key) -> tuple[dict, bytes]:
+    """Da un CMD_VIDEO_FRAME (bytes `data`) ricava (metadati, video_data decifrato).
+
+    Se signCode>0 e videoDataLength>=128: la chiave AES e' a [22:150] RSA-cifrata, payload da 151,
+    primi 128 byte AES-ECB + resto in chiaro. Altrimenti payload da 22, tutto in chiaro.
+    """
+    meta = parse_video_frame_header(data)
+    vdl = meta["video_data_length"]
+    payload_start = 22
+    aes_key = None
+    if sign_code > 0 and vdl >= 128:
+        if private_key is None:
+            raise P2PError("chiave RSA privata mancante: stream non decifrabile")
+        aes_key = rsa_decrypt_aes_key(private_key, data[22:150])
+        payload_start = 151
+    if aes_key is not None:
+        encrypted = data[payload_start:payload_start + 128]
+        plain = data[payload_start + 128:payload_start + vdl]
+        video = decrypt_video_chunk(aes_key, encrypted) + bytes(plain)
+    else:
+        video = bytes(data[payload_start:payload_start + vdl])
+    return meta, video
+
+
+# ── Framing pacchetti DATA in ricezione (per il video) ───────────────────────
+# UDP DATA: f1d0 | bytesToRead(BE16) | dataTypeMarker(0xD1+type) | seqNo(BE16) | partData
+# Messaggio riassemblato (prima parte): XZYH | cmdId(LE16) | bytesToRead(LE32) | resv(2) |
+#   channel(1) | signCode(1) | type(1) | resv(1) = header 16B, poi il payload (message.data).
+P2P_DATATYPE_DATA = 0
+P2P_DATATYPE_VIDEO = 1
+P2P_DATATYPE_CONTROL = 2
+P2P_DATATYPE_BINARY = 3
+P2P_DATA_HEADER_BYTES = 16
+CMD_VIDEO_FRAME = 1300
+
+
+def datatype_marker(data_type: int) -> bytes:
+    return bytes([0xD1, data_type])
+
+
+def parse_udp_data_packet(msg: bytes) -> "dict | None":
+    """Scompone un pacchetto UDP DATA (msgid f1d0). None se non e' un DATA valido."""
+    if len(msg) < 8 or msg[:2] != DATA:
+        return None
+    return {
+        "bytes_to_read": struct.unpack(">H", msg[2:4])[0],
+        "data_type": msg[5] if msg[4] == 0xD1 else -1,
+        "seq_no": struct.unpack(">H", msg[6:8])[0],
+        "part_data": msg[8:],
+    }
+
+
+def parse_message_header(assembled: bytes) -> dict:
+    """Header (16B) di un messaggio riassemblato che inizia con XZYH."""
+    return {
+        "magic_ok": assembled[0:4] == MAGIC_WORD,
+        "command_id": struct.unpack_from("<H", assembled, 4)[0],
+        "bytes_to_read": struct.unpack_from("<I", assembled, 6)[0],
+        "channel": assembled[12],
+        "sign_code": assembled[13],
+        "type": assembled[14],
+    }
+
+
+def build_ack_payload(data_type: int, seq_no: int) -> bytes:
+    """Payload di un ACK per il dataType indicato (numAcks=1)."""
+    return datatype_marker(data_type) + struct.pack(">H", 1) + struct.pack(">H", seq_no)
+
+
+class VideoFrameAssembler:
+    """Riassembla i pacchetti VIDEO (in ordine di seq) in frame CMD_VIDEO_FRAME completi.
+
+    Semplificato per il caso snapshot: assume parti in ordine. `feed(part)` ritorna una lista
+    di (header, frame_payload) completati. NB: il riassemblaggio multi-pacchetto e l'ordinamento
+    sono il punto da validare LIVE (qui best-effort, parti assunte in ordine di arrivo).
+    """
+
+    def __init__(self):
+        self._buf = b""
+        self._header = None
+
+    def feed(self, part_data: bytes) -> list:
+        self._buf += part_data
+        out = []
+        while True:
+            if self._header is None:
+                if len(self._buf) < P2P_DATA_HEADER_BYTES or self._buf[0:4] != MAGIC_WORD:
+                    break
+                self._header = parse_message_header(self._buf)
+                self._buf = self._buf[P2P_DATA_HEADER_BYTES:]
+            need = self._header["bytes_to_read"]
+            if len(self._buf) < need:
+                break
+            out.append((self._header, self._buf[:need]))
+            self._buf = self._buf[need:]
+            self._header = None
+        return out
 
 
 # ── Sessione P2P ─────────────────────────────────────────────────────────────
@@ -246,6 +426,77 @@ class P2PSession:
                 seq_no = struct.unpack(">H", msg[6:8])[0] if len(msg) >= 8 else 0
                 self._send(src, ACK, P2P_DATA_HEADER + struct.pack(">H", 1) + struct.pack(">H", seq_no))
         return False
+
+    # ── Livestream / snapshot keyframe ───────────────────────────────────────
+    # NB: il flusso video (start → ricezione/decrypt → I-frame) e' portato fedelmente dalla
+    # lib JS ma il loop socket e il riassemblaggio multi-pacchetto vanno VALIDATI LIVE su una
+    # cam reale. `dump_path` salva i pacchetti UDP grezzi per il debug offline se qualcosa non torna.
+
+    def start_livestream(self, encryptkey: str, streamtype: int = 1):
+        """Avvia il livestream (CMD_DOORBELL_SET_PAYLOAD 1700 con payload nested 1000)."""
+        value = build_livestream_start_json(self.admin_user_id, encryptkey, streamtype)
+        payload = build_string_type_payload(ENC_TYPE, self.key, CMD_DOORBELL_SET_PAYLOAD, value, self.channel)
+        self._send_data(CMD_DOORBELL_SET_PAYLOAD, payload)
+
+    def stop_livestream(self):
+        """Stop best-effort del livestream (CMD_STOP_REALTIME_MEDIA 1004)."""
+        payload = build_string_type_payload(0, b"", CMD_STOP_REALTIME_MEDIA, str(self.channel), self.channel)
+        self._send_data(CMD_STOP_REALTIME_MEDIA, payload)
+
+    def grab_keyframe(self, rsa_private_key, encryptkey: str, timeout: float = 15.0, dump_path=None) -> bytes:
+        """Avvia lo stream e accumula H.264 fino al primo keyframe completo. Ritorna il bitstream.
+
+        Rileva l'IDR via flag is_key_frame nell'header del frame; considera l'IDR "completo"
+        quando arriva un frame successivo (boundary). Ritorna l'Annex-B accumulato (SPS+PPS+IDR+...).
+        """
+        self.start_livestream(encryptkey)
+        assembler = VideoFrameAssembler()
+        h264 = bytearray()
+        got_keyframe = False
+        complete = False
+        dump = open(dump_path, "wb") if dump_path else None
+        t_end = time.time() + timeout
+        try:
+            while time.time() < t_end and not complete:
+                try:
+                    msg, src = self.sock.recvfrom(16384)
+                except socket.timeout:
+                    continue
+                if dump:
+                    dump.write(struct.pack(">I", len(msg)) + msg)
+                mid = msg[:2]
+                if mid == PING:
+                    self._send(src, PONG, msg[4:] if len(msg) > 4 else b"")
+                    continue
+                if mid != DATA:
+                    continue
+                pkt = parse_udp_data_packet(msg)
+                if pkt is None:
+                    continue
+                self._send(src, ACK, build_ack_payload(pkt["data_type"], pkt["seq_no"]))
+                if pkt["data_type"] != P2P_DATATYPE_VIDEO:
+                    continue
+                for header, frame_payload in assembler.feed(pkt["part_data"]):
+                    if header["command_id"] != CMD_VIDEO_FRAME:
+                        continue
+                    try:
+                        meta, video = extract_video_frame(frame_payload, header["sign_code"], rsa_private_key)
+                    except Exception:  # noqa: BLE001 — pacchetto corrotto/chiave: salta il frame
+                        continue
+                    h264.extend(video)
+                    if meta["is_key_frame"]:
+                        got_keyframe = True
+                    elif got_keyframe:
+                        complete = True  # un frame dopo il keyframe => IDR completo
+                        break
+        finally:
+            if dump:
+                dump.close()
+        if not h264:
+            raise P2PError("nessun dato video ricevuto (start livestream non confermato?)")
+        if not got_keyframe:
+            raise P2PError("nessun keyframe ricevuto entro il timeout")
+        return bytes(h264)
 
     def close(self):
         try:

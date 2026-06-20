@@ -1,0 +1,22 @@
+take_snapshot:
+  name: Scatta snapshot
+  description: >-
+    Cattura un frame FRESCO della camera via P2P e lo salva su file. Richiamabile da
+    ha-tasker/automazioni. Il file deve stare in una cartella in allowlist_external_dirs.
+  fields:
+    entity_id:
+      name: Camera
+      description: L'entita' camera eufy_privacy da cui scattare.
+      required: true
+      example: camera.camcantina
+      selector:
+        entity:
+          integration: eufy_privacy
+          domain: camera
+    filename:
+      name: File
+      description: Percorso del file JPEG da scrivere (supporta template).
+      required: true
+      example: /media/eufy/camcantina.jpg
+      selector:
+        text:
